@@ -13,6 +13,18 @@ tracker:
     - Canceled
     - Duplicate
     - Done
+  # issue_filters:
+  #   all:
+  #     - field: labels
+  #       op: includes
+  #       value: dev-agent
+  #     - any:
+  #         - field: priority
+  #           op: eq
+  #           value: 1
+  #         - field: priority
+  #           op: eq
+  #           value: 2
 polling:
   interval_ms: 5000
 workspace:

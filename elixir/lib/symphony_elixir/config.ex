@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Config do
   """
 
   alias NimbleOptions
-  alias SymphonyElixir.Workflow
+  alias SymphonyElixir.{IssueFilter, Workflow}
 
   @default_active_states ["Todo", "In Progress"]
   @default_terminal_states ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
@@ -219,6 +219,14 @@ defmodule SymphonyElixir.Config do
     get_in(validated_workflow_options(), [:tracker, :terminal_states])
   end
 
+  @spec linear_issue_filters() :: IssueFilter.t()
+  def linear_issue_filters do
+    case resolve_linear_issue_filters() do
+      {:ok, filters} -> filters
+      {:error, _reason} -> nil
+    end
+  end
+
   @spec poll_interval_ms() :: pos_integer()
   def poll_interval_ms do
     get_in(validated_workflow_options(), [:polling, :interval_ms])
@@ -367,6 +375,7 @@ defmodule SymphonyElixir.Config do
          :ok <- require_tracker_kind(),
          :ok <- require_linear_token(),
          :ok <- require_linear_project(),
+         :ok <- require_valid_linear_issue_filters(),
          :ok <- require_valid_codex_runtime_settings() do
       require_codex_command()
     end
@@ -420,6 +429,16 @@ defmodule SymphonyElixir.Config do
 
       _ ->
         :ok
+    end
+  end
+
+  defp require_valid_linear_issue_filters do
+    case resolve_linear_issue_filters() do
+      {:ok, _filters} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, {:invalid_tracker_issue_filters, reason}}
     end
   end
 
@@ -715,6 +734,19 @@ defmodule SymphonyElixir.Config do
 
       value ->
         {:error, {:invalid_codex_approval_policy, value}}
+    end
+  end
+
+  defp resolve_linear_issue_filters do
+    case fetch_value([["tracker", "issue_filters"]], :missing) do
+      :missing ->
+        {:ok, nil}
+
+      nil ->
+        {:ok, nil}
+
+      value ->
+        IssueFilter.normalize(value)
     end
   end
 

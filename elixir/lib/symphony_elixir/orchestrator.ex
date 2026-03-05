@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, IssueFilter, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Linear.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -224,6 +224,10 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.error("Failed to parse WORKFLOW.md: #{inspect(reason)}")
         state
 
+      {:error, {:invalid_tracker_issue_filters, reason}} ->
+        Logger.error("Invalid tracker.issue_filters in WORKFLOW.md: #{inspect(reason)}")
+        state
+
       {:error, reason} ->
         Logger.error("Failed to fetch from Linear: #{inspect(reason)}")
         state
@@ -270,7 +274,7 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec should_dispatch_issue_for_test(Issue.t(), term()) :: boolean()
   def should_dispatch_issue_for_test(%Issue{} = issue, %State{} = state) do
-    should_dispatch_issue?(issue, state, active_state_set(), terminal_state_set())
+    should_dispatch_issue?(issue, state, active_state_set(), terminal_state_set(), Config.linear_issue_filters())
   end
 
   @doc false
@@ -278,7 +282,7 @@ defmodule SymphonyElixir.Orchestrator do
           {:ok, Issue.t()} | {:skip, Issue.t() | :missing} | {:error, term()}
   def revalidate_issue_for_dispatch_for_test(%Issue{} = issue, issue_fetcher)
       when is_function(issue_fetcher, 1) do
-    revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_state_set())
+    revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_state_set(), Config.linear_issue_filters())
   end
 
   @doc false
@@ -438,11 +442,12 @@ defmodule SymphonyElixir.Orchestrator do
   defp choose_issues(issues, state) do
     active_states = active_state_set()
     terminal_states = terminal_state_set()
+    issue_filters = Config.linear_issue_filters()
 
     issues
     |> sort_issues_for_dispatch()
     |> Enum.reduce(state, fn issue, state_acc ->
-      if should_dispatch_issue?(issue, state_acc, active_states, terminal_states) do
+      if should_dispatch_issue?(issue, state_acc, active_states, terminal_states, issue_filters) do
         dispatch_issue(state_acc, issue)
       else
         state_acc
@@ -474,9 +479,11 @@ defmodule SymphonyElixir.Orchestrator do
          %Issue{} = issue,
          %State{running: running, claimed: claimed} = state,
          active_states,
-         terminal_states
+         terminal_states,
+         issue_filters
        ) do
     candidate_issue?(issue, active_states, terminal_states) and
+      issue_matches_pick_filters?(issue, issue_filters) and
       !todo_issue_blocked_by_non_terminal?(issue, terminal_states) and
       !MapSet.member?(claimed, issue.id) and
       !Map.has_key?(running, issue.id) and
@@ -484,7 +491,7 @@ defmodule SymphonyElixir.Orchestrator do
       state_slots_available?(issue, running)
   end
 
-  defp should_dispatch_issue?(_issue, _state, _active_states, _terminal_states), do: false
+  defp should_dispatch_issue?(_issue, _state, _active_states, _terminal_states, _issue_filters), do: false
 
   defp state_slots_available?(%Issue{state: issue_state}, running) when is_map(running) do
     limit = Config.max_concurrent_agents_for_state(issue_state)
@@ -576,7 +583,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil) do
-    case revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, terminal_state_set()) do
+    case revalidate_issue_for_dispatch(
+           issue,
+           &Tracker.fetch_issue_states_by_ids/1,
+           terminal_state_set(),
+           Config.linear_issue_filters()
+         ) do
       {:ok, %Issue{} = refreshed_issue} ->
         do_dispatch_issue(state, refreshed_issue, attempt)
 
@@ -646,11 +658,11 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states)
+  defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states, issue_filters)
        when is_binary(issue_id) and is_function(issue_fetcher, 1) do
     case issue_fetcher.([issue_id]) do
       {:ok, [%Issue{} = refreshed_issue | _]} ->
-        if retry_candidate_issue?(refreshed_issue, terminal_states) do
+        if retry_candidate_issue?(refreshed_issue, terminal_states, issue_filters) do
           {:ok, refreshed_issue}
         else
           {:skip, refreshed_issue}
@@ -664,7 +676,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states), do: {:ok, issue}
+  defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states, _issue_filters), do: {:ok, issue}
 
   defp complete_issue(%State{} = state, issue_id) do
     %{
@@ -744,6 +756,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_retry_issue_lookup(%Issue{} = issue, state, issue_id, attempt, metadata) do
     terminal_states = terminal_state_set()
+    issue_filters = Config.linear_issue_filters()
 
     cond do
       terminal_issue_state?(issue.state, terminal_states) ->
@@ -752,8 +765,8 @@ defmodule SymphonyElixir.Orchestrator do
         cleanup_issue_workspace(issue.identifier)
         {:noreply, release_issue_claim(state, issue_id)}
 
-      retry_candidate_issue?(issue, terminal_states) ->
-        handle_active_retry(state, issue, attempt, metadata)
+      retry_candidate_issue?(issue, terminal_states, issue_filters) ->
+        handle_active_retry(state, issue, attempt, metadata, issue_filters)
 
       true ->
         Logger.debug("Issue left active states, removing claim issue_id=#{issue_id} issue_identifier=#{issue.identifier}")
@@ -794,8 +807,8 @@ defmodule SymphonyElixir.Orchestrator do
     StatusDashboard.notify_update()
   end
 
-  defp handle_active_retry(state, issue, attempt, metadata) do
-    if retry_candidate_issue?(issue, terminal_state_set()) and
+  defp handle_active_retry(state, issue, attempt, metadata, issue_filters) do
+    if retry_candidate_issue?(issue, terminal_state_set(), issue_filters) and
          dispatch_slots_available?(issue, state) do
       {:noreply, dispatch_issue(state, issue, attempt)}
     else
@@ -1105,9 +1118,14 @@ defmodule SymphonyElixir.Orchestrator do
     }
   end
 
-  defp retry_candidate_issue?(%Issue{} = issue, terminal_states) do
+  defp retry_candidate_issue?(%Issue{} = issue, terminal_states, issue_filters) do
     candidate_issue?(issue, active_state_set(), terminal_states) and
+      issue_matches_pick_filters?(issue, issue_filters) and
       !todo_issue_blocked_by_non_terminal?(issue, terminal_states)
+  end
+
+  defp issue_matches_pick_filters?(%Issue{} = issue, issue_filters) do
+    IssueFilter.matches?(issue, issue_filters)
   end
 
   defp dispatch_slots_available?(%Issue{} = issue, %State{} = state) do

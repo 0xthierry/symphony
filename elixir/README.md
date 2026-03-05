@@ -110,6 +110,10 @@ Title: {{ issue.title }} Body: {{ issue.description }}
 Notes:
 
 - If a value is missing, defaults are used.
+- `tracker.issue_filters` is optional and defaults to no extra filtering.
+  - Filter expressions support composition via `all`, `any`, and `not`.
+  - Leaf predicates use `field`, `op`, and `value` and can reference normalized issue fields (for example `labels`, `priority`, `state`, `blocked_by.state`).
+  - Common operators include `eq`, `in`, `includes`, `includes_any`, `contains`, `gt`, `gte`, `lt`, `lte`, and `exists`.
 - Safer Codex defaults are used when policy fields are omitted:
   - `codex.approval_policy` defaults to `{"reject":{"sandbox_approval":true,"rules":true,"mcp_elicitations":true}}`
   - `codex.thread_sandbox` defaults to `workspace-write`
@@ -135,6 +139,18 @@ Notes:
 ```yaml
 tracker:
   api_key: $LINEAR_API_KEY
+  issue_filters:
+    all:
+      - field: labels
+        op: includes
+        value: dev-agent
+      - any:
+          - field: priority
+            op: eq
+            value: 1
+          - field: priority
+            op: eq
+            value: 2
 workspace:
   root: $SYMPHONY_WORKSPACE_ROOT
 hooks:
