@@ -78,7 +78,7 @@ rg -n "mode:claude|claude" -S elixir/lib elixir/test SPEC.md README.md elixir/WO
 
 ## 4.1 CLI surfaces relevant for orchestration
 
-From Anthropic CLI docs and local CLI help:
+From local CLI help and execution probes in this workspace:
 
 - Non-interactive mode is available via `-p/--print`.
 - Machine-readable outputs are available (`--output-format json` and `stream-json`).
@@ -86,15 +86,17 @@ From Anthropic CLI docs and local CLI help:
 - Tool execution can be constrained (`--allowedTools`, `--disallowedTools`, `--tools`).
 - MCP can be configured from files/JSON (`--mcp-config`, `--strict-mcp-config`).
 - Session continuation is supported (`--resume`, `--continue`, `--session-id`).
+- Session persistence and safety controls are exposed (`--no-session-persistence`, `--add-dir`, `--dangerously-skip-permissions`).
 
 This is sufficient to support unattended orchestration semantics similar to current Codex automation.
 
 ## 4.2 Permission modes and unattended runs
 
-Claude docs expose permission modes including:
+The local CLI advertises permission modes including:
 
 - `default`
 - `acceptEdits`
+- `dontAsk`
 - `plan`
 - `bypassPermissions`
 
@@ -127,6 +129,19 @@ Local probe in this workspace:
 - In this sandbox, direct runs failed with `EACCES: permission denied, open` when using default home/config paths.
 - Running with `HOME=/tmp` removed the file-permission error, confirming Claude CLI expects writable home/config/session paths.
 - With `HOME=/tmp`, auth was not present (`Not logged in`), which is expected because auth state is home-scoped.
+
+Observed commands:
+
+```bash
+claude --version
+# 2.1.63 (Claude Code)
+
+claude -p "ping" --output-format json --permission-mode plan
+# error_during_execution ... "EACCES: permission denied, open"
+
+HOME=/tmp claude -p "ping" --output-format json --permission-mode plan
+# {"is_error":true,...,"result":"Not logged in · Please run /login"}
+```
 
 Implication: production worker runs need an explicit writable runtime home/config strategy and non-interactive auth provisioning.
 
