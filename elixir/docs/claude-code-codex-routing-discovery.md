@@ -1,174 +1,196 @@
-# Discovery and Proposal: Add Claude Code Alongside Codex (`0XT-34`)
+# Discovery and Proposal: Label-Routed Claude Code + Codex (`0XT-34`)
 
 Date: 2026-03-05
 
-## 1. Executive Summary
+## 1. Goal
 
-Symphony already has the right primitives to route work by Linear label, but execution is currently hard-wired to Codex.
+Add support for running either Codex or Claude Code per Linear issue with deterministic routing:
 
-Recommended direction:
+- If the issue labels contain `mode:claude`, run Claude Code.
+- Otherwise, run Codex.
+- Default remains Codex.
 
-- Keep Codex as the default execution engine.
-- Add a label router with deterministic behavior:
-  - if issue labels include `mode:claude`, run Claude Code.
-  - otherwise run Codex (default).
-- Introduce an agent backend abstraction so Claude and Codex share orchestration lifecycle logic.
-- Start with opt-in rollout using `mode:claude` only.
+This document captures repository discovery, Claude CLI exploration, and a concrete implementation proposal.
 
-This keeps existing behavior stable while enabling controlled Claude adoption.
+## 2. Repository Baseline Discovery
 
-## 2. Scope and Non-Goals
+### 2.1 Labels are already available and normalized
 
-### In scope (this ticket)
-
-- Discovery of how to integrate Claude Code in this repository.
-- Exploration of Claude CLI and operational constraints.
-- Detailed implementation proposal, validation plan, and rollout strategy.
-
-### Out of scope (this ticket)
-
-- Shipping production code changes.
-- Switching default mode away from Codex.
-- Broad UI/observability redesign.
-
-## 3. Current State in This Repository
-
-### 3.1 Labels are already ingested and normalized
-
-The Linear client already fetches issue labels and lowercases them:
+Label extraction and normalization already exist in the Linear adapter:
 
 - `elixir/lib/symphony_elixir/linear/client.ex:485` (`extract_labels/1`)
 - `elixir/lib/symphony_elixir/linear/client.ex:489` (`String.downcase/1`)
 
-The normalized labels are present in the issue struct:
+Normalized labels are stored on the issue model:
 
-- `elixir/lib/symphony_elixir/linear/issue.ex:40`
+- `elixir/lib/symphony_elixir/linear/issue.ex:17`
+- `elixir/lib/symphony_elixir/linear/issue.ex:40` (`label_names/1`)
 
-The workflow prompt also already exposes labels to the agent context:
+The workflow prompt already includes labels in issue context:
 
-- `elixir/WORKFLOW.md:54` (`Labels: {{ issue.labels }}`)
+- `elixir/WORKFLOW.md:66` (`Labels: {{ issue.labels }}`)
 
-### 3.2 Execution path is Codex-only today
+### 2.2 Routing/filter primitives already exist for dispatch
 
-Agent execution is currently bound to the Codex AppServer module:
+The repository now includes generic issue filtering (`tracker.issue_filters`) used by orchestrator dispatch decisions:
 
-- `elixir/lib/symphony_elixir/agent_runner.ex:7` (`alias ... Codex.AppServer`)
-- `elixir/lib/symphony_elixir/agent_runner.ex:53` (`AppServer.start_session/1`)
-- `elixir/lib/symphony_elixir/agent_runner.ex:66` (`AppServer.run_turn/4`)
+- `elixir/lib/symphony_elixir/issue_filter.ex`
+- `elixir/lib/symphony_elixir/config.ex:222` (`linear_issue_filters/0`)
+- `elixir/lib/symphony_elixir/orchestrator.ex:277` (dispatch filter usage)
 
-Codex command/config are codex-specific:
+This is useful context, but it does not choose agent backend (Codex vs Claude) once an issue is selected.
 
-- `elixir/lib/symphony_elixir/config.ex:31` default command is `codex app-server`
-- `elixir/lib/symphony_elixir/config.ex:277` `codex_command/0`
+### 2.3 Agent execution is Codex-only today
 
-Codex runtime launch is direct shell execution:
+Execution flow is hard-wired to Codex:
 
-- `elixir/lib/symphony_elixir/codex/app_server.ex:175`
+- `elixir/lib/symphony_elixir/agent_runner.ex:7` aliases `SymphonyElixir.Codex.AppServer`
+- `elixir/lib/symphony_elixir/agent_runner.ex:53` starts Codex session
+- `elixir/lib/symphony_elixir/agent_runner.ex:66` runs Codex turn
+- `elixir/lib/symphony_elixir/codex/app_server.ex:175` launches configured codex command
 
-### 3.3 Baseline reproduction signal
+Config validation is Codex-specific today:
 
-Current repository scan confirms no Claude integration exists yet:
+- `elixir/lib/symphony_elixir/config.ex:31` default codex command
+- `elixir/lib/symphony_elixir/config.ex:445` `require_codex_command/0`
+
+### 2.4 Concrete reproduction signal
+
+Observed repository scans in this workspace:
 
 ```bash
-rg -n "mode:claude|claude" -S elixir/lib elixir/test SPEC.md README.md elixir/WORKFLOW.md
-# no matches
+rg -n "mode:claude|mode:codex|claude" elixir/lib elixir/WORKFLOW.md elixir/config -S
+# no matches (exit code 1)
+
+rg -n "Codex\.AppServer|codex_command|codex app-server" \
+  elixir/lib/symphony_elixir/agent_runner.ex \
+  elixir/lib/symphony_elixir/config.ex \
+  elixir/lib/symphony_elixir/codex/app_server.ex -S
+# matches found in all three files
 ```
 
-## 4. Claude Code / Claude CLI Discovery
+Conclusion: label-driven backend routing does not exist yet; runtime remains Codex-only.
 
-## 4.1 CLI surfaces relevant for orchestration
+## 3. Claude CLI Discovery (Local Exploration)
 
-From local CLI help and execution probes in this workspace:
-
-- Non-interactive mode is available via `-p/--print`.
-- Machine-readable outputs are available (`--output-format json` and `stream-json`).
-- Permission behavior is configurable (`--permission-mode ...`).
-- Tool execution can be constrained (`--allowedTools`, `--disallowedTools`, `--tools`).
-- MCP can be configured from files/JSON (`--mcp-config`, `--strict-mcp-config`).
-- Session continuation is supported (`--resume`, `--continue`, `--session-id`).
-- Session persistence and safety controls are exposed (`--no-session-persistence`, `--add-dir`, `--dangerously-skip-permissions`).
-
-This is sufficient to support unattended orchestration semantics similar to current Codex automation.
-
-## 4.2 Permission modes and unattended runs
-
-The local CLI advertises permission modes including:
-
-- `default`
-- `acceptEdits`
-- `dontAsk`
-- `plan`
-- `bypassPermissions`
-
-For unattended worker runs, `bypassPermissions` is the closest equivalent to strict non-interactive automation, but it must only run inside strong sandbox boundaries.
-
-## 4.3 Deployment and model-provider options
-
-Claude Code supports multiple provider backends:
-
-- Anthropic API
-- AWS Bedrock
-- Google Vertex AI
-
-Docs provide provider-selection env vars and model override env vars (for example, provider and model selection keys).
-
-This means Symphony can remain provider-agnostic at orchestration level while backend auth/model policy is managed by environment and per-run config.
-
-## 4.4 Agent SDK option (wrapping Claude CLI)
-
-Anthropic also provides an Agent SDK (TypeScript and Python) that wraps Claude CLI usage patterns and supports options such as `permissionMode`, output format selection, and settings sources.
-
-Given this codebase is Elixir, direct CLI invocation is the simplest first integration path. SDK wrapping can remain a future option if richer session control is needed.
-
-## 4.5 Local environment probe results
-
-Local probe in this workspace:
-
-- `claude` is installed: `2.1.63 (Claude Code)`.
-- CLI supports required automation flags.
-- In this sandbox, direct runs failed with `EACCES: permission denied, open` when using default home/config paths.
-- Running with `HOME=/tmp` removed the file-permission error, confirming Claude CLI expects writable home/config/session paths.
-- With `HOME=/tmp`, auth was not present (`Not logged in`), which is expected because auth state is home-scoped.
-
-Observed commands:
+### 3.1 Installed version and availability
 
 ```bash
+command -v claude
+# /home/thierry/.local/bin/claude
+
 claude --version
 # 2.1.63 (Claude Code)
-
-claude -p "ping" --output-format json --permission-mode plan
-# error_during_execution ... "EACCES: permission denied, open"
-
-HOME=/tmp claude -p "ping" --output-format json --permission-mode plan
-# {"is_error":true,...,"result":"Not logged in · Please run /login"}
 ```
 
-Implication: production worker runs need an explicit writable runtime home/config strategy and non-interactive auth provisioning.
+### 3.2 CLI features relevant to orchestration
 
-## 5. Proposed Design
+From `claude --help`, the following capabilities are directly relevant:
 
-## 5.1 Deterministic routing rules
+- Non-interactive execution: `-p, --print`
+- Structured output: `--output-format text|json|stream-json`
+- Permission controls: `--permission-mode acceptEdits|bypassPermissions|default|dontAsk|plan`
+- Session control: `--resume`, `--continue`, `--session-id`, `--no-session-persistence`
+- Tool surface controls: `--tools`, `--allowedTools`, `--disallowedTools`
+- MCP controls: `--mcp-config`, `--strict-mcp-config`
+- Workspace/scope controls: `--add-dir`, `--setting-sources`, `--settings`
 
-Normalize labels to lowercase (already done today), then apply:
+### 3.3 Output behavior in non-interactive runs
 
-1. If labels include `mode:claude`, route to Claude backend.
-2. Else route to Codex backend.
+Probe command:
+
+```bash
+claude -p "Respond with exactly OK" --output-format json --permission-mode plan --tools ""
+```
+
+Observed behavior:
+
+- Output is a JSON array containing multiple event records (for example `system/init`, `assistant`, `rate_limit_event`, `result`).
+- Final useful response is in the `result` event (`"result":"OK"`).
+
+Probe command:
+
+```bash
+claude -p "Respond with exactly OK" --output-format stream-json --permission-mode plan --tools ""
+```
+
+Observed behavior:
+
+- Output is newline-delimited JSON events.
+- In this environment, startup hook events (`hook_started`, `hook_response`) appear before init/result events.
+
+Implication: parser logic must be event-oriented and tolerant of extra event types rather than assuming a single response object.
+
+### 3.4 Auth and runtime home behavior
+
+Default home in this environment is authenticated:
+
+```bash
+claude auth status
+# {"loggedIn": true, ...}
+```
+
+Changing home to a fresh temp path removes auth context:
+
+```bash
+HOME=/tmp claude auth status
+# {"loggedIn": false, ...}
+
+HOME=/tmp claude -p "ping" --output-format json --permission-mode plan
+# result indicates not logged in and requests /login
+```
+
+Implication: unattended production runs need explicit and writable runtime home/config paths plus pre-provisioned auth for that runtime identity.
+
+### 3.5 Operational implications for Symphony
+
+- Claude CLI is viable for unattended invocation in this environment.
+- Session/auth behavior is home-scoped; environment isolation must be deliberate.
+- Startup hooks/settings can inject additional text/events; parser and policy should not assume a minimal stream.
+- Permission mode and tool restrictions should be explicitly configured by workflow, not left to workstation defaults.
+
+## 4. Proposed Design
+
+### 4.1 Deterministic routing contract
+
+Routing rule (required by ticket):
+
+1. If issue labels include `mode:claude`, backend is `claude`.
+2. Else backend is `codex`.
 
 Default remains Codex.
 
-Optional later extension:
+### 4.2 Backend selector module
 
-- Explicit `mode:codex` can be supported, but not required for initial scope.
+Introduce a small selector module to centralize routing logic:
 
-## 5.2 Introduce backend abstraction
+- New: `SymphonyElixir.AgentMode`
 
-Add a behavior boundary for agent execution so orchestration logic stays shared:
+Suggested API:
 
-- `SymphonyElixir.AgentBackend` behavior (new)
-- `SymphonyElixir.AgentBackend.Codex` adapter (wraps current `Codex.AppServer` flow)
-- `SymphonyElixir.AgentBackend.ClaudeCli` adapter (new)
+```elixir
+@type backend :: :codex | :claude
+@spec for_issue(SymphonyElixir.Linear.Issue.t()) :: backend()
+```
 
-### Suggested behavior sketch
+Reference behavior:
+
+```elixir
+def for_issue(issue) do
+  labels = issue |> SymphonyElixir.Linear.Issue.label_names() |> MapSet.new()
+  if MapSet.member?(labels, "mode:claude"), do: :claude, else: :codex
+end
+```
+
+### 4.3 Provider abstraction for execution
+
+Introduce provider abstraction so runner/orchestrator logic is shared:
+
+- New behavior: `SymphonyElixir.AgentBackend`
+- New adapter: `SymphonyElixir.AgentBackend.Codex`
+- New adapter: `SymphonyElixir.AgentBackend.ClaudeCli`
+
+Behavior sketch:
 
 ```elixir
 defmodule SymphonyElixir.AgentBackend do
@@ -178,159 +200,205 @@ defmodule SymphonyElixir.AgentBackend do
 end
 ```
 
-`AgentRunner` then chooses backend from issue labels before `start_session`.
+Then update `AgentRunner` to:
 
-## 5.3 Claude backend execution model
+- pick backend from `AgentMode.for_issue(issue)`
+- delegate `start_session/run_turn/stop_session` to selected adapter
+- preserve existing retry/continue behavior
 
-Recommended initial strategy:
+### 4.4 Claude CLI backend shape
 
-- Use `claude -p` in non-interactive mode.
-- Use JSON output format for deterministic parseability.
-- Pass permission mode from config (default conservative, with explicit override for unattended environments).
-- Pass tool constraints from config to keep parity with current safety posture.
-- Execute with workspace as cwd, similar to Codex worker behavior.
+Recommended v1 backend strategy:
 
-Command shape (illustrative):
+- Use `claude -p` per turn.
+- Use `--output-format stream-json` for incremental event parsing and compatibility with event-rich output.
+- Keep session continuity by supplying a stable `--session-id` per runner session.
+- Run with explicit env overrides for isolated runtime directories.
+- Preserve current workspace cwd behavior.
+
+Illustrative command:
 
 ```bash
 claude -p "$PROMPT" \
-  --output-format json \
+  --output-format stream-json \
   --permission-mode "$CLAUDE_PERMISSION_MODE" \
-  --model "$CLAUDE_MODEL"
+  --model "$CLAUDE_MODEL" \
+  --session-id "$CLAUDE_SESSION_ID"
 ```
 
-## 5.4 Config additions
+### 4.5 Config proposal
 
-Add a new top-level `agent` routing block and `claude` block.
-
-Example proposal:
+Keep existing `codex.*` config untouched. Add Claude-specific and routing config:
 
 ```yaml
 agent:
   default_mode: codex
-  label_mode_prefix: "mode:"
+  mode_label: mode:claude
 
 claude:
   command: claude
   model: sonnet
-  permission_mode: bypassPermissions
-  output_format: json
+  permission_mode: plan
+  output_format: stream-json
+  session_persistence: true
   setting_sources: project,local
+  tools: default
+  allowed_tools: []
+  disallowed_tools: []
+  runtime_home: .symphony/claude-home
+  runtime_config_home: .symphony/claude-config
   extra_args: []
 ```
 
-Notes:
+Validation rules to add in `Config`:
 
-- Preserve existing `codex.*` settings untouched for backward compatibility.
-- Keep codex as default when label routing does not match.
+- `agent.default_mode` in `codex|claude` (default `codex`)
+- `agent.mode_label` non-empty string (default `mode:claude`)
+- `claude.command` non-empty when Claude backend can be selected
+- `claude.output_format` constrained to `json|stream-json` for machine parsing
 
-## 5.5 Event and observability compatibility
+### 4.6 Output normalization and parser strategy
 
-Current runtime fields and dashboard labels are codex-named (`codex_*`).
+Add parser utility in Claude backend:
 
-Recommended incremental approach:
+- Accept either JSON array (`--output-format json`) or NDJSON events (`stream-json`)
+- Ignore unknown event types
+- Extract canonical fields:
+  - final text result
+  - model name
+  - token usage/cost when present
+  - session id
+- Return structured failure for:
+  - parse errors
+  - auth errors (`not logged in`)
+  - CLI process failures/timeouts
 
-- Keep existing fields for backward compatibility initially.
-- Add `backend` metadata (`codex` or `claude`) in running entry state.
-- If needed later, rename `codex_*` fields to provider-neutral fields in a separate migration ticket.
+### 4.7 Observability updates
 
-## 5.6 Failure and fallback semantics
+Current runtime metrics are codex-prefixed. For minimal-risk v1:
 
-To avoid silent behavior changes:
+- Add `backend` field to running metadata (`codex|claude`)
+- Include backend in log lines and status rows
+- Keep existing token counters as-is to avoid broad refactor
 
-- If label resolves to Claude and Claude backend fails to initialize, fail the run with explicit error (do not silently switch to Codex in v1).
-- Keep retries managed by existing orchestrator retry/backoff logic.
-- Include backend identity in error messages and status dashboard output.
+Optional follow-up: migrate to provider-neutral metric key names.
 
-## 6. Implementation Plan (Phased)
+### 4.8 Failure policy
 
-### Phase 1: Routing and abstraction (no behavior change for non-Claude labels)
+Fail closed for selected backend in v1:
 
-- Add backend selector module from issue labels.
-- Introduce backend behavior and Codex adapter wrapper.
-- Update `AgentRunner` to call selected backend.
-- Add unit tests for routing decisions.
+- If `mode:claude` routes to Claude and Claude initialization/execution fails, do not auto-fallback to Codex.
+- Surface explicit backend-specific error and let existing retry/backoff policies operate.
 
-### Phase 2: Claude CLI backend
+This avoids silent behavior drift.
 
-- Implement Claude CLI runner module with command builder and JSON parsing.
-- Add configuration parsing/validation for `claude.*` options.
-- Add integration tests with fake `claude` executable fixture to simulate success/error output.
+## 5. Implementation Blueprint (File-Level)
 
-### Phase 3: Operational hardening
+### Phase 1: Routing and abstraction
 
-- Add explicit runtime home/config directory controls for Claude execution.
-- Document auth/token setup for unattended runs.
-- Add dashboard/backend annotations and failure diagnostics.
+- Add `elixir/lib/symphony_elixir/agent_mode.ex`
+- Add `elixir/lib/symphony_elixir/agent_backend.ex`
+- Add `elixir/lib/symphony_elixir/agent_backend/codex.ex` (thin wrapper around current Codex flow)
+- Refactor `elixir/lib/symphony_elixir/agent_runner.ex` to use selected backend
 
-## 7. Validation Plan
+### Phase 2: Claude backend + config
 
-### 7.1 Unit tests
+- Add `elixir/lib/symphony_elixir/agent_backend/claude_cli.ex`
+- Extend `elixir/lib/symphony_elixir/config.ex` schema/getters for `agent.*` and `claude.*`
+- Update `elixir/WORKFLOW.md` example config with optional Claude section
 
-- Label routing matrix:
-  - `[] -> codex`
-  - `["bug"] -> codex`
-  - `["mode:claude"] -> claude`
-  - mixed-case labels still route correctly after normalization.
+### Phase 3: Observability and errors
 
-### 7.2 Integration tests
+- Add backend markers in orchestrator/status payloads where useful
+- Classify Claude failure reasons for logs/status dashboard
 
-- `AgentRunner` chooses Codex when no mode label is present.
-- `AgentRunner` chooses Claude when `mode:claude` is present.
-- Claude command construction includes required flags and workspace cwd.
-- Claude error output propagates into orchestrator retry path.
+### Phase 4: Tests
 
-### 7.3 Manual validation
+- Add `elixir/test/symphony_elixir/agent_mode_test.exs`
+- Add backend selection tests in `agent_runner` tests
+- Add Claude parser/execution tests with fixture outputs (json array + stream-json lines + auth failure)
+- Add config validation tests for new keys
 
-- Create two comparable Linear tickets:
-  - one without `mode:claude`
-  - one with `mode:claude`
-- Confirm backend selected in logs/status dashboard.
-- Confirm retry behavior and state transitions stay unchanged.
+## 6. Validation Plan
 
-## 8. Risks and Mitigations
+### 6.1 Unit tests
 
-- Auth/session file paths may be unwritable in restricted sandboxes.
-  - Mitigation: configure writable runtime home/config directory for Claude process.
-- Provider/auth drift across environments.
-  - Mitigation: explicit startup health check + clear error classification.
-- CLI output format/schema drift.
-  - Mitigation: parse defensively; pin tested Claude CLI version in deployment docs.
-- Safety mismatch between providers.
-  - Mitigation: explicit permission mode policy per backend in `WORKFLOW.md`.
+Routing matrix:
 
-## 9. Recommended Rollout
+- `[] -> :codex`
+- `["bug"] -> :codex`
+- `["mode:claude"] -> :claude`
+- mixed case from Linear still routes because labels are normalized upstream
 
-1. Ship routing + abstraction with no Claude labels in production tickets.
-2. Enable `mode:claude` for a small pilot subset.
-3. Observe stability, retries, token usage, and result quality.
-4. Expand label usage after validation.
+Parser matrix:
 
-## 10. Open Questions
+- valid `json` array output
+- valid `stream-json` event sequence
+- unknown event types ignored
+- malformed JSON returns explicit parse error
 
-- Should `mode:claude` failure ever auto-fallback to Codex, or always fail closed?
-- Do we want provider-neutral metric keys immediately, or defer to a follow-up migration?
-- Should per-project defaults allow Claude without labels, or keep label-only routing long-term?
+### 6.2 Integration tests
 
-## 11. Source References
+- `AgentRunner` selects Codex when `mode:claude` absent
+- `AgentRunner` selects Claude when label present
+- Claude command includes expected flags/env/cwd
+- Claude auth failure bubbles to orchestrator retry path
+
+### 6.3 Manual validation in staging
+
+- Ticket A without `mode:claude` executes Codex
+- Ticket B with `mode:claude` executes Claude
+- Verify backend value in logs/dashboard
+- Verify retry behavior and issue state transitions remain unchanged
+
+## 7. Risks and Mitigations
+
+- Home-scoped auth mismatch in production
+  - Mitigation: explicit runtime home/config dirs + documented auth bootstrap for runtime identity
+- CLI output drift
+  - Mitigation: event-tolerant parser + pinned tested Claude CLI version
+- Safety mismatch across providers
+  - Mitigation: explicit permission/tool settings in workflow config
+- Hidden user-level hooks/settings affecting runs
+  - Mitigation: controlled `setting_sources` and explicit settings path for worker runtime
+
+## 8. Rollout Recommendation
+
+1. Land routing abstraction with Codex adapter first (no behavior change).
+2. Land Claude backend behind label routing only.
+3. Pilot with a small set of `mode:claude` issues.
+4. Observe error rates, retry loops, token/cost behavior, and output quality.
+5. Expand usage only after stability thresholds are met.
+
+## 9. Open Questions
+
+- Should conflicting future labels (for example `mode:claude` + `mode:codex`) be rejected explicitly or resolved by fixed precedence?
+- Should we add provider-neutral metric names now or in a dedicated migration ticket?
+- Do we need explicit startup health checks for Claude auth before dispatching `mode:claude` issues?
+
+## 10. References
 
 ### Repository references
 
 - `elixir/lib/symphony_elixir/linear/client.ex:485`
+- `elixir/lib/symphony_elixir/linear/issue.ex:40`
 - `elixir/lib/symphony_elixir/agent_runner.ex:7`
 - `elixir/lib/symphony_elixir/codex/app_server.ex:175`
 - `elixir/lib/symphony_elixir/config.ex:31`
-- `elixir/WORKFLOW.md:54`
+- `elixir/lib/symphony_elixir/config.ex:222`
+- `elixir/lib/symphony_elixir/issue_filter.ex`
+- `elixir/lib/symphony_elixir/orchestrator.ex:277`
+- `elixir/WORKFLOW.md:66`
 
-### External references (Anthropic)
+### External references
 
 - Claude Code CLI reference:
   - https://docs.anthropic.com/en/docs/claude-code/cli-reference
-- Permission modes:
-  - https://docs.anthropic.com/en/docs/claude-code/iam#permission-modes
-- Settings and precedence:
+- Claude Code settings:
   - https://docs.anthropic.com/en/docs/claude-code/settings
-- Deployment/provider configuration:
+- Claude Code IAM and permission modes:
+  - https://docs.anthropic.com/en/docs/claude-code/iam#permission-modes
+- Claude Code deployment overview:
   - https://docs.anthropic.com/en/docs/claude-code/deployment/overview
-- Agent SDK (CLI wrapper, TS/Python):
+- Claude Code SDK:
   - https://docs.anthropic.com/en/docs/claude-code/sdk
