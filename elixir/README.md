@@ -98,8 +98,13 @@ hooks:
 agent:
   max_concurrent_agents: 10
   max_turns: 20
+  default_mode: codex
+  mode_label: mode:claude
 codex:
   command: codex app-server
+claude:
+  command: claude
+  output_format: stream-json
 ---
 
 You are working on a Linear issue {{ issue.identifier }}.
@@ -124,6 +129,12 @@ Notes:
   `externalSandbox`, `workspaceWrite`.
 - `agent.max_turns` caps how many back-to-back Codex turns Symphony will run in a single agent
   invocation when a turn completes normally but the issue is still in an active state. Default: `20`.
+- Routing backend selection is deterministic per issue:
+  - If issue labels include `mode:claude` (or your configured `agent.mode_label`), Symphony runs Claude.
+  - Otherwise, Symphony runs `agent.default_mode` (default: `codex`).
+- `claude.output_format` must be `json` or `stream-json` for machine parsing.
+- Claude runtime home/config directories can be scoped with `claude.runtime_home` and
+  `claude.runtime_config_home` (defaults: `.symphony/claude-home` and `.symphony/claude-config`).
 - If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
   identifier, title, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run

@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, IssueFilter, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentMode, AgentRunner, Config, IssueFilter, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Linear.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -198,6 +198,22 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:error, :missing_codex_command} ->
         Logger.error("Codex command missing in WORKFLOW.md")
+        state
+
+      {:error, :missing_claude_command} ->
+        Logger.error("Claude command missing in WORKFLOW.md")
+        state
+
+      {:error, {:invalid_agent_default_mode, value}} ->
+        Logger.error("Invalid agent.default_mode in WORKFLOW.md: #{inspect(value)}")
+        state
+
+      {:error, {:invalid_agent_mode_label, value}} ->
+        Logger.error("Invalid agent.mode_label in WORKFLOW.md: #{inspect(value)}")
+        state
+
+      {:error, {:invalid_claude_output_format, value}} ->
+        Logger.error("Invalid claude.output_format in WORKFLOW.md: #{inspect(value)}")
         state
 
       {:error, {:invalid_codex_approval_policy, value}} ->
@@ -624,6 +640,7 @@ defmodule SymphonyElixir.Orchestrator do
             ref: ref,
             identifier: issue.identifier,
             issue: issue,
+            backend: AgentMode.for_issue(issue),
             session_id: nil,
             last_codex_message: nil,
             last_codex_timestamp: nil,
@@ -939,6 +956,7 @@ defmodule SymphonyElixir.Orchestrator do
           issue_id: issue_id,
           identifier: metadata.identifier,
           state: metadata.issue.state,
+          backend: Map.get(metadata, :backend, :codex),
           session_id: metadata.session_id,
           codex_app_server_pid: metadata.codex_app_server_pid,
           codex_input_tokens: metadata.codex_input_tokens,

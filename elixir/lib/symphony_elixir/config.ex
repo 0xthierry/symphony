@@ -27,11 +27,25 @@ defmodule SymphonyElixir.Config do
   @default_hook_timeout_ms 60_000
   @default_max_concurrent_agents 10
   @default_agent_max_turns 20
+  @default_agent_default_mode "codex"
+  @default_agent_mode_label "mode:claude"
   @default_max_retry_backoff_ms 300_000
   @default_codex_command "codex app-server"
   @default_codex_turn_timeout_ms 3_600_000
   @default_codex_read_timeout_ms 5_000
   @default_codex_stall_timeout_ms 300_000
+  @default_claude_command "claude"
+  @default_claude_model "sonnet"
+  @default_claude_permission_mode "plan"
+  @default_claude_output_format "stream-json"
+  @default_claude_session_persistence true
+  @default_claude_setting_sources "project,local"
+  @default_claude_tools "default"
+  @default_claude_allowed_tools []
+  @default_claude_disallowed_tools []
+  @default_claude_runtime_home ".symphony/claude-home"
+  @default_claude_runtime_config_home ".symphony/claude-config"
+  @default_claude_extra_args []
   @default_codex_approval_policy %{
     "reject" => %{
       "sandbox_approval" => true,
@@ -90,6 +104,14 @@ defmodule SymphonyElixir.Config do
                                    type: :pos_integer,
                                    default: @default_agent_max_turns
                                  ],
+                                 default_mode: [
+                                   type: :string,
+                                   default: @default_agent_default_mode
+                                 ],
+                                 mode_label: [
+                                   type: :string,
+                                   default: @default_agent_mode_label
+                                 ],
                                  max_retry_backoff_ms: [
                                    type: :pos_integer,
                                    default: @default_max_retry_backoff_ms
@@ -116,6 +138,51 @@ defmodule SymphonyElixir.Config do
                                  stall_timeout_ms: [
                                    type: :integer,
                                    default: @default_codex_stall_timeout_ms
+                                 ]
+                               ]
+                             ],
+                             claude: [
+                               type: :map,
+                               default: %{},
+                               keys: [
+                                 command: [type: :string, default: @default_claude_command],
+                                 model: [type: :string, default: @default_claude_model],
+                                 permission_mode: [
+                                   type: :string,
+                                   default: @default_claude_permission_mode
+                                 ],
+                                 output_format: [
+                                   type: :string,
+                                   default: @default_claude_output_format
+                                 ],
+                                 session_persistence: [
+                                   type: :boolean,
+                                   default: @default_claude_session_persistence
+                                 ],
+                                 setting_sources: [
+                                   type: :string,
+                                   default: @default_claude_setting_sources
+                                 ],
+                                 tools: [type: :string, default: @default_claude_tools],
+                                 allowed_tools: [
+                                   type: {:list, :string},
+                                   default: @default_claude_allowed_tools
+                                 ],
+                                 disallowed_tools: [
+                                   type: {:list, :string},
+                                   default: @default_claude_disallowed_tools
+                                 ],
+                                 runtime_home: [
+                                   type: :string,
+                                   default: @default_claude_runtime_home
+                                 ],
+                                 runtime_config_home: [
+                                   type: :string,
+                                   default: @default_claude_runtime_config_home
+                                 ],
+                                 extra_args: [
+                                   type: {:list, :string},
+                                   default: @default_claude_extra_args
                                  ]
                                ]
                              ],
@@ -160,6 +227,7 @@ defmodule SymphonyElixir.Config do
 
   @type workflow_payload :: Workflow.loaded_workflow()
   @type tracker_kind :: String.t() | nil
+  @type agent_mode :: :codex | :claude
   @type codex_runtime_settings :: %{
           approval_policy: String.t() | map(),
           thread_sandbox: String.t(),
@@ -272,6 +340,22 @@ defmodule SymphonyElixir.Config do
     get_in(validated_workflow_options(), [:agent, :max_turns])
   end
 
+  @spec agent_default_mode() :: agent_mode()
+  def agent_default_mode do
+    case resolve_agent_default_mode() do
+      {:ok, mode} -> mode
+      {:error, _reason} -> :codex
+    end
+  end
+
+  @spec agent_mode_label() :: String.t()
+  def agent_mode_label do
+    case resolve_agent_mode_label() do
+      {:ok, label} -> label
+      {:error, _reason} -> @default_agent_mode_label
+    end
+  end
+
   @spec max_concurrent_agents_for_state(term()) :: pos_integer()
   def max_concurrent_agents_for_state(state_name) when is_binary(state_name) do
     state_limits = get_in(validated_workflow_options(), [:agent, :max_concurrent_agents_by_state])
@@ -327,6 +411,70 @@ defmodule SymphonyElixir.Config do
     |> max(0)
   end
 
+  @spec claude_command() :: String.t()
+  def claude_command do
+    get_in(validated_workflow_options(), [:claude, :command])
+  end
+
+  @spec claude_model() :: String.t()
+  def claude_model do
+    get_in(validated_workflow_options(), [:claude, :model])
+  end
+
+  @spec claude_permission_mode() :: String.t()
+  def claude_permission_mode do
+    get_in(validated_workflow_options(), [:claude, :permission_mode])
+  end
+
+  @spec claude_output_format() :: String.t()
+  def claude_output_format do
+    get_in(validated_workflow_options(), [:claude, :output_format])
+  end
+
+  @spec claude_session_persistence?() :: boolean()
+  def claude_session_persistence? do
+    get_in(validated_workflow_options(), [:claude, :session_persistence])
+  end
+
+  @spec claude_setting_sources() :: String.t()
+  def claude_setting_sources do
+    get_in(validated_workflow_options(), [:claude, :setting_sources])
+  end
+
+  @spec claude_tools() :: String.t()
+  def claude_tools do
+    get_in(validated_workflow_options(), [:claude, :tools])
+  end
+
+  @spec claude_allowed_tools() :: [String.t()]
+  def claude_allowed_tools do
+    get_in(validated_workflow_options(), [:claude, :allowed_tools])
+  end
+
+  @spec claude_disallowed_tools() :: [String.t()]
+  def claude_disallowed_tools do
+    get_in(validated_workflow_options(), [:claude, :disallowed_tools])
+  end
+
+  @spec claude_extra_args() :: [String.t()]
+  def claude_extra_args do
+    get_in(validated_workflow_options(), [:claude, :extra_args])
+  end
+
+  @spec claude_runtime_home(Path.t() | nil) :: Path.t()
+  def claude_runtime_home(workspace \\ nil) do
+    validated_workflow_options()
+    |> get_in([:claude, :runtime_home])
+    |> resolve_runtime_dir(workspace, @default_claude_runtime_home)
+  end
+
+  @spec claude_runtime_config_home(Path.t() | nil) :: Path.t()
+  def claude_runtime_config_home(workspace \\ nil) do
+    validated_workflow_options()
+    |> get_in([:claude, :runtime_config_home])
+    |> resolve_runtime_dir(workspace, @default_claude_runtime_config_home)
+  end
+
   @spec workflow_prompt() :: String.t()
   def workflow_prompt do
     case current_workflow() do
@@ -376,8 +524,12 @@ defmodule SymphonyElixir.Config do
          :ok <- require_linear_token(),
          :ok <- require_linear_project(),
          :ok <- require_valid_linear_issue_filters(),
-         :ok <- require_valid_codex_runtime_settings() do
-      require_codex_command()
+         :ok <- require_valid_codex_runtime_settings(),
+         :ok <- require_codex_command(),
+         :ok <- require_valid_agent_default_mode(),
+         :ok <- require_valid_agent_mode_label(),
+         :ok <- require_claude_command() do
+      require_valid_claude_output_format()
     end
   end
 
@@ -457,6 +609,36 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  defp require_valid_agent_default_mode do
+    case resolve_agent_default_mode() do
+      {:ok, _mode} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp require_valid_agent_mode_label do
+    case resolve_agent_mode_label() do
+      {:ok, _label} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp require_claude_command do
+    if byte_size(String.trim(claude_command())) > 0 do
+      :ok
+    else
+      {:error, :missing_claude_command}
+    end
+  end
+
+  defp require_valid_claude_output_format do
+    case String.trim(String.downcase(claude_output_format())) do
+      "json" -> :ok
+      "stream-json" -> :ok
+      other -> {:error, {:invalid_claude_output_format, other}}
+    end
+  end
+
   defp validated_workflow_options do
     workflow_config()
     |> extract_workflow_options()
@@ -470,6 +652,7 @@ defmodule SymphonyElixir.Config do
       workspace: extract_workspace_options(section_map(config, "workspace")),
       agent: extract_agent_options(section_map(config, "agent")),
       codex: extract_codex_options(section_map(config, "codex")),
+      claude: extract_claude_options(section_map(config, "claude")),
       hooks: extract_hooks_options(section_map(config, "hooks")),
       observability: extract_observability_options(section_map(config, "observability")),
       server: extract_server_options(section_map(config, "server"))
@@ -500,6 +683,8 @@ defmodule SymphonyElixir.Config do
     %{}
     |> put_if_present(:max_concurrent_agents, integer_value(Map.get(section, "max_concurrent_agents")))
     |> put_if_present(:max_turns, positive_integer_value(Map.get(section, "max_turns")))
+    |> put_if_present(:default_mode, scalar_string_value(Map.get(section, "default_mode")))
+    |> put_if_present(:mode_label, scalar_string_value(Map.get(section, "mode_label")))
     |> put_if_present(:max_retry_backoff_ms, positive_integer_value(Map.get(section, "max_retry_backoff_ms")))
     |> put_if_present(
       :max_concurrent_agents_by_state,
@@ -513,6 +698,22 @@ defmodule SymphonyElixir.Config do
     |> put_if_present(:turn_timeout_ms, integer_value(Map.get(section, "turn_timeout_ms")))
     |> put_if_present(:read_timeout_ms, integer_value(Map.get(section, "read_timeout_ms")))
     |> put_if_present(:stall_timeout_ms, integer_value(Map.get(section, "stall_timeout_ms")))
+  end
+
+  defp extract_claude_options(section) do
+    %{}
+    |> put_if_present(:command, command_value(Map.get(section, "command")))
+    |> put_if_present(:model, scalar_string_value(Map.get(section, "model")))
+    |> put_if_present(:permission_mode, scalar_string_value(Map.get(section, "permission_mode")))
+    |> put_if_present(:output_format, scalar_string_value(Map.get(section, "output_format")))
+    |> put_if_present(:session_persistence, boolean_value(Map.get(section, "session_persistence")))
+    |> put_if_present(:setting_sources, scalar_string_value(Map.get(section, "setting_sources")))
+    |> put_if_present(:tools, scalar_string_value(Map.get(section, "tools")))
+    |> put_if_present(:allowed_tools, csv_value(Map.get(section, "allowed_tools")))
+    |> put_if_present(:disallowed_tools, csv_value(Map.get(section, "disallowed_tools")))
+    |> put_if_present(:runtime_home, binary_value(Map.get(section, "runtime_home")))
+    |> put_if_present(:runtime_config_home, binary_value(Map.get(section, "runtime_config_home")))
+    |> put_if_present(:extra_args, csv_value(Map.get(section, "extra_args")))
   end
 
   defp extract_hooks_options(section) do
@@ -712,6 +913,48 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  defp resolve_agent_default_mode do
+    case fetch_value([["agent", "default_mode"]], :missing) do
+      :missing ->
+        {:ok, :codex}
+
+      nil ->
+        {:ok, :codex}
+
+      value when is_binary(value) ->
+        case String.trim(value) |> String.downcase() do
+          "codex" -> {:ok, :codex}
+          "claude" -> {:ok, :claude}
+          _ -> {:error, {:invalid_agent_default_mode, value}}
+        end
+
+      value ->
+        {:error, {:invalid_agent_default_mode, value}}
+    end
+  end
+
+  defp resolve_agent_mode_label do
+    case fetch_value([["agent", "mode_label"]], :missing) do
+      :missing ->
+        {:ok, @default_agent_mode_label}
+
+      nil ->
+        {:ok, @default_agent_mode_label}
+
+      value when is_binary(value) ->
+        label = value |> String.trim() |> String.downcase()
+
+        if label == "" do
+          {:error, {:invalid_agent_mode_label, value}}
+        else
+          {:ok, label}
+        end
+
+      value ->
+        {:error, {:invalid_agent_mode_label, value}}
+    end
+  end
+
   defp resolve_codex_approval_policy do
     case fetch_value([["codex", "approval_policy"]], :missing) do
       :missing ->
@@ -892,6 +1135,32 @@ defmodule SymphonyElixir.Config do
   end
 
   defp resolve_path_value(_value, default), do: default
+
+  defp resolve_runtime_dir(value, workspace, default) do
+    configured =
+      case value do
+        runtime when is_binary(runtime) ->
+          trimmed = String.trim(runtime)
+          if(trimmed == "", do: default, else: trimmed)
+
+        _ ->
+          default
+      end
+
+    cond do
+      uri_path?(configured) ->
+        configured
+
+      Path.type(configured) == :absolute ->
+        Path.expand(configured)
+
+      is_binary(workspace) and String.trim(workspace) != "" ->
+        Path.expand(configured, Path.expand(workspace))
+
+      true ->
+        Path.expand(configured)
+    end
+  end
 
   defp preserve_command_name(path) do
     cond do

@@ -6,6 +6,7 @@ defmodule SymphonyElixir.TestSupport do
       use ExUnit.Case
       import ExUnit.CaptureLog
 
+      alias SymphonyElixir.AgentMode
       alias SymphonyElixir.AgentRunner
       alias SymphonyElixir.CLI
       alias SymphonyElixir.Codex.AppServer
@@ -104,6 +105,8 @@ defmodule SymphonyElixir.TestSupport do
           workspace_root: Path.join(System.tmp_dir!(), "symphony_workspaces"),
           max_concurrent_agents: 10,
           max_turns: 20,
+          agent_default_mode: "codex",
+          agent_mode_label: "mode:claude",
           max_retry_backoff_ms: 300_000,
           max_concurrent_agents_by_state: %{},
           codex_command: "codex app-server",
@@ -113,6 +116,18 @@ defmodule SymphonyElixir.TestSupport do
           codex_turn_timeout_ms: 3_600_000,
           codex_read_timeout_ms: 5_000,
           codex_stall_timeout_ms: 300_000,
+          claude_command: "claude",
+          claude_model: "sonnet",
+          claude_permission_mode: "plan",
+          claude_output_format: "stream-json",
+          claude_session_persistence: true,
+          claude_setting_sources: "project,local",
+          claude_tools: "default",
+          claude_allowed_tools: [],
+          claude_disallowed_tools: [],
+          claude_runtime_home: ".symphony/claude-home",
+          claude_runtime_config_home: ".symphony/claude-config",
+          claude_extra_args: [],
           hook_after_create: nil,
           hook_before_run: nil,
           hook_after_run: nil,
@@ -140,6 +155,8 @@ defmodule SymphonyElixir.TestSupport do
     workspace_root = Keyword.get(config, :workspace_root)
     max_concurrent_agents = Keyword.get(config, :max_concurrent_agents)
     max_turns = Keyword.get(config, :max_turns)
+    agent_default_mode = Keyword.get(config, :agent_default_mode)
+    agent_mode_label = Keyword.get(config, :agent_mode_label)
     max_retry_backoff_ms = Keyword.get(config, :max_retry_backoff_ms)
     max_concurrent_agents_by_state = Keyword.get(config, :max_concurrent_agents_by_state)
     codex_command = Keyword.get(config, :codex_command)
@@ -149,6 +166,18 @@ defmodule SymphonyElixir.TestSupport do
     codex_turn_timeout_ms = Keyword.get(config, :codex_turn_timeout_ms)
     codex_read_timeout_ms = Keyword.get(config, :codex_read_timeout_ms)
     codex_stall_timeout_ms = Keyword.get(config, :codex_stall_timeout_ms)
+    claude_command = Keyword.get(config, :claude_command)
+    claude_model = Keyword.get(config, :claude_model)
+    claude_permission_mode = Keyword.get(config, :claude_permission_mode)
+    claude_output_format = Keyword.get(config, :claude_output_format)
+    claude_session_persistence = Keyword.get(config, :claude_session_persistence)
+    claude_setting_sources = Keyword.get(config, :claude_setting_sources)
+    claude_tools = Keyword.get(config, :claude_tools)
+    claude_allowed_tools = Keyword.get(config, :claude_allowed_tools)
+    claude_disallowed_tools = Keyword.get(config, :claude_disallowed_tools)
+    claude_runtime_home = Keyword.get(config, :claude_runtime_home)
+    claude_runtime_config_home = Keyword.get(config, :claude_runtime_config_home)
+    claude_extra_args = Keyword.get(config, :claude_extra_args)
     hook_after_create = Keyword.get(config, :hook_after_create)
     hook_before_run = Keyword.get(config, :hook_before_run)
     hook_after_run = Keyword.get(config, :hook_after_run)
@@ -180,6 +209,8 @@ defmodule SymphonyElixir.TestSupport do
         "agent:",
         "  max_concurrent_agents: #{yaml_value(max_concurrent_agents)}",
         "  max_turns: #{yaml_value(max_turns)}",
+        "  default_mode: #{yaml_value(agent_default_mode)}",
+        "  mode_label: #{yaml_value(agent_mode_label)}",
         "  max_retry_backoff_ms: #{yaml_value(max_retry_backoff_ms)}",
         "  max_concurrent_agents_by_state: #{yaml_value(max_concurrent_agents_by_state)}",
         "codex:",
@@ -190,6 +221,19 @@ defmodule SymphonyElixir.TestSupport do
         "  turn_timeout_ms: #{yaml_value(codex_turn_timeout_ms)}",
         "  read_timeout_ms: #{yaml_value(codex_read_timeout_ms)}",
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",
+        "claude:",
+        "  command: #{yaml_value(claude_command)}",
+        "  model: #{yaml_value(claude_model)}",
+        "  permission_mode: #{yaml_value(claude_permission_mode)}",
+        "  output_format: #{yaml_value(claude_output_format)}",
+        "  session_persistence: #{yaml_value(claude_session_persistence)}",
+        "  setting_sources: #{yaml_value(claude_setting_sources)}",
+        "  tools: #{yaml_value(claude_tools)}",
+        "  allowed_tools: #{yaml_value(claude_allowed_tools)}",
+        "  disallowed_tools: #{yaml_value(claude_disallowed_tools)}",
+        "  runtime_home: #{yaml_value(claude_runtime_home)}",
+        "  runtime_config_home: #{yaml_value(claude_runtime_config_home)}",
+        "  extra_args: #{yaml_value(claude_extra_args)}",
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
         server_yaml(server_port, server_host),
