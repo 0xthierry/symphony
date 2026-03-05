@@ -79,6 +79,8 @@ defmodule SymphonyElixir.HttpServer do
   end
 
   defp normalize_host(host) when host in ["", nil], do: "127.0.0.1"
+  defp normalize_host({_, _, _, _} = host), do: host |> :inet.ntoa() |> to_string()
+  defp normalize_host({_, _, _, _, _, _, _, _} = host), do: host |> :inet.ntoa() |> to_string()
   defp normalize_host(host) when is_binary(host), do: host
   defp normalize_host(host), do: to_string(host)
 
