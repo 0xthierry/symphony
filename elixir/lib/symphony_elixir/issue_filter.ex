@@ -37,6 +37,29 @@ defmodule SymphonyElixir.IssueFilter do
 
   @type t :: filter_node() | nil
 
+  @operator_aliases %{
+    "eq" => :eq,
+    "=" => :eq,
+    "neq" => :neq,
+    "ne" => :neq,
+    "not_eq" => :neq,
+    "!=" => :neq,
+    "in" => :in,
+    "not_in" => :not_in,
+    "nin" => :not_in,
+    "includes" => :includes,
+    "includes_any" => :includes_any,
+    "includes_all" => :includes_all,
+    "contains" => :contains,
+    "starts_with" => :starts_with,
+    "ends_with" => :ends_with,
+    "gt" => :gt,
+    "gte" => :gte,
+    "lt" => :lt,
+    "lte" => :lte,
+    "exists" => :exists
+  }
+
   @spec normalize(term()) :: {:ok, t()} | {:error, term()}
   def normalize(nil), do: {:ok, nil}
 
@@ -114,23 +137,17 @@ defmodule SymphonyElixir.IssueFilter do
 
   defp parse_filter_children(other), do: {:error, {:invalid_issue_filter_children, other}}
 
-  defp parse_filter_list(children) when is_list(children) do
-    if children == [] do
-      {:error, :empty_issue_filter_list}
-    else
-      Enum.reduce_while(children, {:ok, []}, fn child, {:ok, acc} ->
-        case parse_filter(child) do
-          {:ok, parsed_child} ->
-            {:cont, {:ok, [parsed_child | acc]}}
+  defp parse_filter_list([]), do: {:error, :empty_issue_filter_list}
 
-          {:error, reason} ->
-            {:halt, {:error, reason}}
-        end
-      end)
-      |> case do
-        {:ok, parsed_children} -> {:ok, Enum.reverse(parsed_children)}
-        {:error, reason} -> {:error, reason}
-      end
+  defp parse_filter_list(children) when is_list(children) do
+    parse_filter_list(children, [])
+  end
+
+  defp parse_filter_list([], acc), do: {:ok, Enum.reverse(acc)}
+
+  defp parse_filter_list([child | rest], acc) do
+    with {:ok, parsed_child} <- parse_filter(child) do
+      parse_filter_list(rest, [parsed_child | acc])
     end
   end
 
@@ -193,32 +210,15 @@ defmodule SymphonyElixir.IssueFilter do
   end
 
   defp parse_operator(op) do
-    op
-    |> to_string()
-    |> String.trim()
-    |> String.downcase()
-    |> case do
-      "eq" -> {:ok, :eq}
-      "=" -> {:ok, :eq}
-      "neq" -> {:ok, :neq}
-      "ne" -> {:ok, :neq}
-      "not_eq" -> {:ok, :neq}
-      "!=" -> {:ok, :neq}
-      "in" -> {:ok, :in}
-      "not_in" -> {:ok, :not_in}
-      "nin" -> {:ok, :not_in}
-      "includes" -> {:ok, :includes}
-      "includes_any" -> {:ok, :includes_any}
-      "includes_all" -> {:ok, :includes_all}
-      "contains" -> {:ok, :contains}
-      "starts_with" -> {:ok, :starts_with}
-      "ends_with" -> {:ok, :ends_with}
-      "gt" -> {:ok, :gt}
-      "gte" -> {:ok, :gte}
-      "lt" -> {:ok, :lt}
-      "lte" -> {:ok, :lte}
-      "exists" -> {:ok, :exists}
-      other -> {:error, {:invalid_issue_filter_operator, other}}
+    normalized_operator =
+      op
+      |> to_string()
+      |> String.trim()
+      |> String.downcase()
+
+    case Map.fetch(@operator_aliases, normalized_operator) do
+      {:ok, parsed_operator} -> {:ok, parsed_operator}
+      :error -> {:error, {:invalid_issue_filter_operator, normalized_operator}}
     end
   end
 
@@ -239,25 +239,57 @@ defmodule SymphonyElixir.IssueFilter do
 
   defp evaluate_condition(%Issue{} = issue, %{field_path: field_path, op: op, value: expected}) do
     values = extract_field_values(issue, field_path)
-
-    case op do
-      :eq -> Enum.any?(values, &values_equal?(&1, expected))
-      :neq -> Enum.all?(values, &(not values_equal?(&1, expected)))
-      :in -> Enum.any?(values, &value_in_expected_list?(&1, expected))
-      :not_in -> Enum.all?(values, &(not value_in_expected_list?(&1, expected)))
-      :includes -> Enum.any?(values, &values_equal?(&1, expected))
-      :includes_any -> expected |> Enum.any?(fn value -> Enum.any?(values, &values_equal?(&1, value)) end)
-      :includes_all -> expected |> Enum.all?(fn value -> Enum.any?(values, &values_equal?(&1, value)) end)
-      :contains -> Enum.any?(values, &binary_contains?(&1, expected))
-      :starts_with -> Enum.any?(values, &binary_starts_with?(&1, expected))
-      :ends_with -> Enum.any?(values, &binary_ends_with?(&1, expected))
-      :gt -> Enum.any?(values, &compare_order(&1, expected, :gt))
-      :gte -> Enum.any?(values, &compare_order(&1, expected, :gte))
-      :lt -> Enum.any?(values, &compare_order(&1, expected, :lt))
-      :lte -> Enum.any?(values, &compare_order(&1, expected, :lte))
-      :exists -> expected == Enum.any?(values, &value_present?/1)
-    end
+    apply_condition_operator(op, values, expected)
   end
+
+  defp apply_condition_operator(:eq, values, expected),
+    do: Enum.any?(values, &values_equal?(&1, expected))
+
+  defp apply_condition_operator(:neq, values, expected),
+    do: Enum.all?(values, &(not values_equal?(&1, expected)))
+
+  defp apply_condition_operator(:in, values, expected),
+    do: Enum.any?(values, &value_in_expected_list?(&1, expected))
+
+  defp apply_condition_operator(:not_in, values, expected),
+    do: Enum.all?(values, &(not value_in_expected_list?(&1, expected)))
+
+  defp apply_condition_operator(:includes, values, expected),
+    do: Enum.any?(values, &values_equal?(&1, expected))
+
+  defp apply_condition_operator(:includes_any, values, expected) do
+    expected
+    |> Enum.any?(fn value -> Enum.any?(values, &values_equal?(&1, value)) end)
+  end
+
+  defp apply_condition_operator(:includes_all, values, expected) do
+    expected
+    |> Enum.all?(fn value -> Enum.any?(values, &values_equal?(&1, value)) end)
+  end
+
+  defp apply_condition_operator(:contains, values, expected),
+    do: Enum.any?(values, &binary_contains?(&1, expected))
+
+  defp apply_condition_operator(:starts_with, values, expected),
+    do: Enum.any?(values, &binary_starts_with?(&1, expected))
+
+  defp apply_condition_operator(:ends_with, values, expected),
+    do: Enum.any?(values, &binary_ends_with?(&1, expected))
+
+  defp apply_condition_operator(:gt, values, expected),
+    do: Enum.any?(values, &compare_order(&1, expected, :gt))
+
+  defp apply_condition_operator(:gte, values, expected),
+    do: Enum.any?(values, &compare_order(&1, expected, :gte))
+
+  defp apply_condition_operator(:lt, values, expected),
+    do: Enum.any?(values, &compare_order(&1, expected, :lt))
+
+  defp apply_condition_operator(:lte, values, expected),
+    do: Enum.any?(values, &compare_order(&1, expected, :lte))
+
+  defp apply_condition_operator(:exists, values, expected),
+    do: expected == Enum.any?(values, &value_present?/1)
 
   defp extract_field_values(value, []), do: leaf_values(value)
 
@@ -307,12 +339,20 @@ defmodule SymphonyElixir.IssueFilter do
         value
 
       :error ->
-        normalized_segment = normalize_key_segment(segment)
-
-        Enum.find_value(map, :missing, fn {key, value} ->
-          if normalize_key_segment(key) == normalized_segment, do: value, else: false
-        end)
+        find_map_value_by_normalized_key(map, segment)
     end
+  end
+
+  defp find_map_value_by_normalized_key(map, segment) do
+    normalized_segment = normalize_key_segment(segment)
+
+    Enum.find_value(map, :missing, fn {key, value} ->
+      maybe_match_normalized_key(normalized_segment, key, value)
+    end)
+  end
+
+  defp maybe_match_normalized_key(normalized_segment, key, value) do
+    if normalize_key_segment(key) == normalized_segment, do: value, else: false
   end
 
   defp parse_list_index(segment) do
