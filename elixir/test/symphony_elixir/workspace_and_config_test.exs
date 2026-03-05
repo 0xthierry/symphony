@@ -477,6 +477,137 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
+  test "orchestrator applies composed tracker issue filters for dispatch eligibility" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_issue_filters: %{
+        all: [
+          %{field: "labels", op: "includes", value: "dev-agent"},
+          %{
+            any: [
+              %{field: "priority", op: "eq", value: 1},
+              %{field: "priority", op: "eq", value: 2}
+            ]
+          }
+        ]
+      }
+    )
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(
+             %Issue{
+               id: "filter-match",
+               identifier: "MT-2001",
+               title: "Matches filter",
+               state: "Todo",
+               labels: ["dev-agent", "backend"],
+               priority: 1
+             },
+             state
+           )
+
+    refute Orchestrator.should_dispatch_issue_for_test(
+             %Issue{
+               id: "filter-label-miss",
+               identifier: "MT-2002",
+               title: "Label miss",
+               state: "Todo",
+               labels: ["backend"],
+               priority: 1
+             },
+             state
+           )
+
+    refute Orchestrator.should_dispatch_issue_for_test(
+             %Issue{
+               id: "filter-priority-miss",
+               identifier: "MT-2003",
+               title: "Priority miss",
+               state: "Todo",
+               labels: ["dev-agent"],
+               priority: 4
+             },
+             state
+           )
+  end
+
+  test "orchestrator issue filters support nested issue field paths" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_issue_filters: %{
+        field: "blocked_by.state",
+        op: "includes",
+        value: "In Progress"
+      }
+    )
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(
+             %Issue{
+               id: "filter-blocker-match",
+               identifier: "MT-2004",
+               title: "Nested match",
+               state: "In Progress",
+               blocked_by: [%{id: "B-1", state: "In Progress"}]
+             },
+             state
+           )
+
+    refute Orchestrator.should_dispatch_issue_for_test(
+             %Issue{
+               id: "filter-blocker-miss",
+               identifier: "MT-2005",
+               title: "Nested miss",
+               state: "In Progress",
+               blocked_by: [%{id: "B-2", state: "Done"}]
+             },
+             state
+           )
+  end
+
+  test "dispatch defaults remain unchanged when tracker issue filters are omitted" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_issue_filters: nil)
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(
+             %Issue{
+               id: "no-filter-default",
+               identifier: "MT-2006",
+               title: "No filter default behavior",
+               state: "Todo",
+               labels: ["backend"],
+               priority: 4
+             },
+             state
+           )
+  end
+
+  test "invalid tracker issue filters fail config validation" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_issue_filters: %{all: "not-a-list"})
+
+    assert {:error, {:invalid_tracker_issue_filters, _reason}} = Config.validate!()
+    assert Config.linear_issue_filters() == nil
+  end
+
   test "dispatch revalidation skips stale todo issue once a non-terminal blocker appears" do
     stale_issue = %Issue{
       id: "blocked-2",

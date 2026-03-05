@@ -355,6 +355,20 @@ Fields:
   - Default: `Todo`, `In Progress`
 - `terminal_states` (list of strings or comma-separated string)
   - Default: `Closed`, `Cancelled`, `Canceled`, `Duplicate`, `Done`
+- `issue_filters` (object or list, optional)
+  - Default: unset (`nil`), meaning no extra dispatch filtering beyond normal eligibility rules.
+  - Supports composable boolean expressions:
+    - `all: [<filter>, ...]` (logical AND)
+    - `any: [<filter>, ...]` (logical OR)
+    - `not: <filter>` (logical NOT)
+  - Leaf predicate shape:
+    - `field` (string dot-path into normalized issue data; examples: `labels`, `priority`, `state`, `blocked_by.state`)
+    - `op` (string operator; default `eq`)
+    - `value` (operator operand; required except for `exists`)
+  - Typical operators include `eq`, `neq`, `in`, `not_in`, `includes`, `includes_any`,
+    `includes_all`, `contains`, `starts_with`, `ends_with`, `gt`, `gte`, `lt`, `lte`, `exists`.
+  - Invalid `issue_filters` values should fail dispatch preflight validation until fixed.
+  - Changes should be re-applied at runtime and affect subsequent dispatch and retry eligibility.
 
 #### 5.3.2 `polling` (object)
 
@@ -707,6 +721,7 @@ An issue is dispatch-eligible only if all are true:
 - It is not already in `claimed`.
 - Global concurrency slots are available.
 - Per-state concurrency slots are available.
+- If `tracker.issue_filters` is configured, the issue matches that filter expression.
 - Blocker rule for `Todo` state passes:
   - If the issue state is `Todo`, do not dispatch when any blocker is non-terminal.
 
@@ -1982,6 +1997,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 ### 17.4 Orchestrator Dispatch, Reconciliation, and Retry
 
 - Dispatch sort order is priority then oldest creation time
+- Configured `tracker.issue_filters` gate dispatch and retry eligibility
 - `Todo` issue with non-terminal blockers is not eligible
 - `Todo` issue with terminal blockers is eligible
 - Active-state issue refresh updates running entry state
