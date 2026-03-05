@@ -775,6 +775,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     write_workflow_file!(Workflow.workflow_file_path(),
       workspace_root: nil,
+      agent_default_mode: nil,
+      agent_mode_label: nil,
       max_concurrent_agents: nil,
       codex_approval_policy: nil,
       codex_thread_sandbox: nil,
@@ -782,6 +784,18 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       codex_turn_timeout_ms: nil,
       codex_read_timeout_ms: nil,
       codex_stall_timeout_ms: nil,
+      claude_command: nil,
+      claude_model: nil,
+      claude_permission_mode: nil,
+      claude_output_format: nil,
+      claude_session_persistence: nil,
+      claude_setting_sources: nil,
+      claude_tools: nil,
+      claude_allowed_tools: nil,
+      claude_disallowed_tools: nil,
+      claude_runtime_home: nil,
+      claude_runtime_config_home: nil,
+      claude_extra_args: nil,
       tracker_api_token: nil,
       tracker_project_slug: nil
     )
@@ -791,6 +805,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Config.linear_project_slug() == nil
     assert Config.workspace_root() == Path.join(System.tmp_dir!(), "symphony_workspaces")
     assert Config.max_concurrent_agents() == 10
+    assert Config.agent_default_mode() == :codex
+    assert Config.agent_mode_label() == "mode:claude"
     assert Config.codex_command() == "codex app-server"
 
     assert Config.codex_approval_policy() == %{
@@ -815,6 +831,16 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Config.codex_turn_timeout_ms() == 3_600_000
     assert Config.codex_read_timeout_ms() == 5_000
     assert Config.codex_stall_timeout_ms() == 300_000
+    assert Config.claude_command() == "claude"
+    assert Config.claude_model() == "sonnet"
+    assert Config.claude_permission_mode() == "plan"
+    assert Config.claude_output_format() == "stream-json"
+    assert Config.claude_session_persistence?()
+    assert Config.claude_setting_sources() == "project,local"
+    assert Config.claude_tools() == "default"
+    assert Config.claude_allowed_tools() == []
+    assert Config.claude_disallowed_tools() == []
+    assert Config.claude_extra_args() == []
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_command: "codex app-server --model gpt-5.3-codex")
     assert Config.codex_command() == "codex app-server --model gpt-5.3-codex"
@@ -822,7 +848,13 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       codex_approval_policy: "on-request",
       codex_thread_sandbox: "workspace-write",
-      codex_turn_sandbox_policy: %{type: "workspaceWrite", writableRoots: ["/tmp/workspace", "/tmp/cache"]}
+      codex_turn_sandbox_policy: %{type: "workspaceWrite", writableRoots: ["/tmp/workspace", "/tmp/cache"]},
+      agent_default_mode: "claude",
+      agent_mode_label: "mode:anthropic",
+      claude_output_format: "json",
+      claude_allowed_tools: "exec_command, request_user_input",
+      claude_disallowed_tools: ["danger-full-access"],
+      claude_extra_args: ["--foo", "bar"]
     )
 
     assert Config.codex_approval_policy() == "on-request"
@@ -832,6 +864,13 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
              "type" => "workspaceWrite",
              "writableRoots" => ["/tmp/workspace", "/tmp/cache"]
            }
+
+    assert Config.agent_default_mode() == :claude
+    assert Config.agent_mode_label() == "mode:anthropic"
+    assert Config.claude_output_format() == "json"
+    assert Config.claude_allowed_tools() == ["exec_command", "request_user_input"]
+    assert Config.claude_disallowed_tools() == ["danger-full-access"]
+    assert Config.claude_extra_args() == ["--foo", "bar"]
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: ",")
     assert Config.linear_active_states() == ["Todo", "In Progress"]
@@ -888,6 +927,17 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
            }
 
     assert {:error, {:invalid_codex_approval_policy, ""}} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(), agent_default_mode: "future-backend")
+    assert Config.agent_default_mode() == :codex
+    assert {:error, {:invalid_agent_default_mode, "future-backend"}} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(), agent_mode_label: "")
+    assert Config.agent_mode_label() == "mode:claude"
+    assert {:error, {:invalid_agent_mode_label, ""}} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(), claude_output_format: "text")
+    assert {:error, {:invalid_claude_output_format, "text"}} = Config.validate!()
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_thread_sandbox: "")
     assert Config.codex_thread_sandbox() == "workspace-write"

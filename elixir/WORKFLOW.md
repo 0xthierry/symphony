@@ -40,12 +40,21 @@ hooks:
 agent:
   max_concurrent_agents: 10
   max_turns: 20
+  default_mode: codex
+  mode_label: mode:claude
 codex:
   command: codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=xhigh --model gpt-5.3-codex app-server
   approval_policy: never
   thread_sandbox: workspace-write
   turn_sandbox_policy:
     type: workspaceWrite
+# claude:
+#   command: claude
+#   model: sonnet
+#   permission_mode: plan
+#   output_format: stream-json
+#   runtime_home: .symphony/claude-home
+#   runtime_config_home: .symphony/claude-config
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`
